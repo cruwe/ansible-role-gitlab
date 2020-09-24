@@ -55,20 +55,42 @@
     creates=/var/opt/gitlab/bootstrapped
   failed_when: false
 
-- name: Create GitLab SSL configuration folder.
-  file:
-    path: /etc/gitlab/ssl
-    state: directory
-    owner: root
-    group: root
-    mode: 0700
-  when: gitlab_create_self_signed_cert
-
 - name: Create self-signed certificate.
-  command: >
-    openssl req -new -nodes -x509 -subj "{{ gitlab_self_signed_cert_subj }}"
-    -days 3650 -keyout {{ gitlab_ssl_certificate_key }} -out {{ gitlab_ssl_certificate }} -extensions v3_ca
-    creates={{ gitlab_ssl_certificate }}
+  shell: |
+    TMP=$(mktemp)
+    cat /etc/pki/tls/openssl.cnf \
+    > $TMP \
+    && \
+    {
+    cat >> $TMP <<EOF
+    [SAN]
+    subjectAltName = @alt_names
+    [alt_names]
+    DNS.1 = localhost
+    DNS.2 = {{ gitlab_domain }}
+    DNS.3 = {{ registry_domain }}
+    EOF
+    } \
+    && openssl req \
+         -config $TMP \
+         -extensions v3_ca \
+         -extensions SAN \
+         -keyout {{ gitlab_ssl_certificate_key }} \
+         -new \
+         -newkey rsa:2048 \
+         -nodes \
+         -out {{ gitlab_ssl_certificate }} \
+         -reqexts SAN \
+         -subj "{{ gitlab_self_signed_cert_subj }}" \
+         -sha256 \
+         -x509 \
+    && rm $TMP \
+    && cat {{ gitlab_ssl_certificate }} \
+    >> /etc/ssl/certs/ca-bundle.trust.crt
+  # FIXME: cat'ing into bundle trust is dirty, but `update-ca-trust` ignores
+  # FIXME: self-signed certs
+  args:
+    creates: "{{ gitlab_ssl_certificate }}"
   when: gitlab_create_self_signed_cert
 
 - name: Copy GitLab configuration file.
